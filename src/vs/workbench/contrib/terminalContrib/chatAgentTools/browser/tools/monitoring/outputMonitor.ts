@@ -12,24 +12,24 @@ import { MarkdownString } from '../../../../../../../base/common/htmlContent.js'
 import { Disposable } from '../../../../../../../base/common/lifecycle.js';
 import { isObject, isString } from '../../../../../../../base/common/types.js';
 import { localize } from '../../../../../../../nls.js';
+import { IConfigurationService } from '../../../../../../../platform/configuration/common/configuration.js';
 import { ExtensionIdentifier } from '../../../../../../../platform/extensions/common/extensions.js';
+import { ILogService } from '../../../../../../../platform/log/common/log.js';
 import { IChatWidgetService } from '../../../../../chat/browser/chat.js';
 import { ChatElicitationRequestPart } from '../../../../../chat/browser/chatElicitationRequestPart.js';
 import { ChatModel } from '../../../../../chat/common/chatModel.js';
 import { IChatService } from '../../../../../chat/common/chatService.js';
+import { LocalChatSessionUri } from '../../../../../chat/common/chatUri.js';
 import { ChatAgentLocation } from '../../../../../chat/common/constants.js';
 import { ChatMessageRole, ILanguageModelsService } from '../../../../../chat/common/languageModels.js';
 import { IToolInvocationContext } from '../../../../../chat/common/languageModelToolsService.js';
 import { ITaskService } from '../../../../../tasks/common/taskService.js';
+import { ITerminalService } from '../../../../../terminal/browser/terminal.js';
+import { TerminalChatAgentToolsSettingId } from '../../../common/terminalChatAgentToolsConfiguration.js';
 import { detectsInputRequiredPattern } from '../../executeStrategy/executeStrategy.js';
 import { ILinkLocation } from '../../taskHelpers.js';
 import { IConfirmationPrompt, IExecution, IPollingResult, OutputMonitorState, PollingConsts } from './types.js';
 import { getTextResponseFromStream } from './utils.js';
-import { IConfigurationService } from '../../../../../../../platform/configuration/common/configuration.js';
-import { TerminalChatAgentToolsSettingId } from '../../../common/terminalChatAgentToolsConfiguration.js';
-import { ILogService } from '../../../../../../../platform/log/common/log.js';
-import { ITerminalService } from '../../../../../terminal/browser/terminal.js';
-import { LocalChatSessionUri } from '../../../../../chat/common/chatUri.js';
 
 export interface IOutputMonitor extends Disposable {
 	readonly pollingResult: IPollingResult & { pollDurationMs: number } | undefined;
@@ -62,6 +62,8 @@ export class OutputMonitor extends Disposable implements IOutputMonitor {
 	private _pollingResult: IPollingResult & { pollDurationMs: number } | undefined;
 	get pollingResult(): IPollingResult & { pollDurationMs: number } | undefined { return this._pollingResult; }
 
+	private _monitoringPromise: Promise<void> | undefined;
+
 	private readonly _outputMonitorTelemetryCounters: IOutputMonitorTelemetryCounters = {
 		inputToolManualAcceptCount: 0,
 		inputToolManualRejectCount: 0,
@@ -93,10 +95,18 @@ export class OutputMonitor extends Disposable implements IOutputMonitor {
 	) {
 		super();
 
-		// Start async to ensure listeners are set up
-		timeout(0).then(() => {
-			this._startMonitoring(command, invocationContext, token);
+		// Start async monitoring and track the promise for external completion tracking
+		this._monitoringPromise = timeout(0).then(() => {
+			return this._startMonitoring(command, invocationContext, token);
 		});
+	}
+
+	/**
+	 * Get the monitoring completion promise for external tracking
+	 * @returns Promise that resolves when monitoring is complete, or undefined if not started
+	 */
+	public getCompletionPromise(): Promise<void> | undefined {
+		return this._monitoringPromise;
 	}
 
 	private async _startMonitoring(
